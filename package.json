@@ -1,0 +1,12 @@
+{
+  "name": "video-intelligence",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Multi-Camera Conversational CCTV Video Intelligence Platform",
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "dev:backend": "python server.py",
+    "dev": "npm --prefix frontend run dev"
+  }
+}

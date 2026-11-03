@@ -18,9 +18,11 @@ Pillow>=10.0.0
 # Database
 # sqlite3 is built-in
 
-# Web UI
+# Web UI & API
 streamlit>=1.28.0
 streamlit-extras>=0.3.0
+fastapi>=0.110.0
+uvicorn>=0.28.0
 
 # Data / Schema
 pydantic>=2.0.0

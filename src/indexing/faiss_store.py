@@ -23,11 +23,40 @@ from src.config import cfg
 logger = logging.getLogger(__name__)
 
 
+class NumpyFlatIPIndex:
+    """Fallback index implementing the FAISS FlatIP API using pure NumPy."""
+    def __init__(self, dim: int):
+        self.dim = dim
+        self.vectors = np.empty((0, dim), dtype=np.float32)
+
+    @property
+    def ntotal(self) -> int:
+        return len(self.vectors)
+
+    def add(self, x: np.ndarray) -> None:
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        if len(self.vectors) == 0:
+            self.vectors = x
+        else:
+            self.vectors = np.vstack([self.vectors, x])
+
+    def search(self, x: np.ndarray, k: int):
+        if len(self.vectors) == 0:
+            return np.zeros((len(x), 0), dtype=np.float32), np.zeros((len(x), 0), dtype=np.int64)
+        sims = np.dot(x, self.vectors.T)
+        k = min(k, len(self.vectors))
+        indices = np.argsort(-sims, axis=1)[:, :k]
+        scores = np.take_along_axis(sims, indices, axis=1)
+        return scores.astype(np.float32), indices.astype(np.int64)
+
+    def reconstruct(self, idx: int, out: np.ndarray) -> None:
+        out[:] = self.vectors[idx]
+
+
 class FAISSStore:
     """
     FAISS-based vector store with JSON metadata sidecar.
-
-    Thread-safety: not thread-safe. Use a single instance.
+    Includes NumPy FlatIP fallback if faiss-cpu is unavailable.
     """
 
     def __init__(self,
@@ -39,33 +68,44 @@ class FAISSStore:
         self.dim = dim or cfg.embedding_dim
         self._index = None
         self._meta: List[Dict] = []   # parallel list to FAISS vectors
-
-    def _ensure_faiss(self):
-        try:
-            import faiss
-            return faiss
-        except ImportError:
-            logger.error("faiss-cpu not installed. Run: pip install faiss-cpu")
-            raise
+        self._is_numpy = False
 
     def load_or_create(self) -> None:
         """Load existing index from disk, or create a new empty one."""
-        faiss = self._ensure_faiss()
+        try:
+            import faiss
+            if self.index_path.exists() and self.meta_path.exists():
+                try:
+                    self._index = faiss.read_index(str(self.index_path))
+                    with open(self.meta_path, "r", encoding="utf-8") as f:
+                        self._meta = json.load(f)
+                    logger.info("FAISS index loaded: %d vectors from %s",
+                                self._index.ntotal, self.index_path)
+                    return
+                except Exception as e:
+                    logger.warning("Failed to load FAISS index (%s), creating new", e)
 
-        if self.index_path.exists() and self.meta_path.exists():
-            try:
-                self._index = faiss.read_index(str(self.index_path))
-                with open(self.meta_path, "r", encoding="utf-8") as f:
-                    self._meta = json.load(f)
-                logger.info("FAISS index loaded: %d vectors from %s",
-                            self._index.ntotal, self.index_path)
-                return
-            except Exception as e:
-                logger.warning("Failed to load FAISS index (%s), creating new", e)
+            self._index = faiss.IndexFlatIP(self.dim)
+            self._meta = []
+            logger.info("FAISS: Created new FlatIP index (dim=%d)", self.dim)
+        except ImportError:
+            logger.info("faiss-cpu not installed — using high-performance NumPy FlatIP index (dim=%d)", self.dim)
+            self._is_numpy = True
+            np_data_path = self.index_path.with_suffix(".npy")
+            if np_data_path.exists() and self.meta_path.exists():
+                try:
+                    vecs = np.load(str(np_data_path))
+                    self._index = NumpyFlatIPIndex(self.dim)
+                    self._index.vectors = vecs
+                    with open(self.meta_path, "r", encoding="utf-8") as f:
+                        self._meta = json.load(f)
+                    logger.info("NumPy vector index loaded: %d vectors", self._index.ntotal)
+                    return
+                except Exception as e:
+                    logger.warning("Failed to load numpy vectors (%s), creating new", e)
 
-        self._index = faiss.IndexFlatIP(self.dim)
-        self._meta = []
-        logger.info("FAISS: Created new FlatIP index (dim=%d)", self.dim)
+            self._index = NumpyFlatIPIndex(self.dim)
+            self._meta = []
 
     def add(self, embeddings: np.ndarray, metadata: Optional[List[Dict]] = None) -> List[int]:
         """
@@ -144,15 +184,19 @@ class FAISSStore:
         if self._index is None:
             return
         try:
-            import faiss
             self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            faiss.write_index(self._index, str(self.index_path))
+            if self._is_numpy:
+                np_data_path = self.index_path.with_suffix(".npy")
+                np.save(str(np_data_path), self._index.vectors)
+            else:
+                import faiss
+                faiss.write_index(self._index, str(self.index_path))
             with open(self.meta_path, "w", encoding="utf-8") as f:
                 json.dump(self._meta, f)
-            logger.info("FAISS index saved: %d vectors → %s",
+            logger.info("Vector index saved: %d vectors → %s",
                         self._index.ntotal, self.index_path)
         except Exception as e:
-            logger.error("Failed to save FAISS index: %s", e)
+            logger.error("Failed to save vector index: %s", e)
 
     def remove_camera(self, camera_id: str) -> None:
         """

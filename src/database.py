@@ -124,6 +124,58 @@ def init_db() -> None:
             latency_ms  REAL
         );
 
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id    TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            role          TEXT NOT NULL,
+            content       TEXT NOT NULL,
+            evidence_json TEXT,
+            created_at    TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS memories (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            category    TEXT DEFAULT 'general',
+            key         TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS watchdog_rules (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL,
+            camera_id    TEXT NOT NULL,
+            object_class TEXT,
+            color        TEXT,
+            severity     TEXT DEFAULT 'HIGH',
+            active       INTEGER DEFAULT 1,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS watchdog_alerts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id      INTEGER,
+            rule_name    TEXT NOT NULL,
+            camera_id    TEXT NOT NULL,
+            camera_name  TEXT NOT NULL,
+            object_class TEXT NOT NULL,
+            color        TEXT NOT NULL,
+            timestamp    REAL NOT NULL,
+            crop_url     TEXT NOT NULL,
+            video_url    TEXT NOT NULL,
+            severity     TEXT DEFAULT 'HIGH',
+            acknowledged INTEGER DEFAULT 0,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tracks_camera     ON tracks(camera_id);
         CREATE INDEX IF NOT EXISTS idx_tracks_class      ON tracks(class_name);
         CREATE INDEX IF NOT EXISTS idx_tracks_color      ON tracks(dominant_color);
@@ -131,6 +183,8 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_obs_track         ON track_observations(track_db_id);
         CREATE INDEX IF NOT EXISTS idx_emb_track         ON embeddings(track_db_id);
         CREATE INDEX IF NOT EXISTS idx_aliases_canonical ON aliases(canonical_term);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_watchdog_alerts_ack ON watchdog_alerts(acknowledged);
         """)
     logger.info("Database initialized at %s", DB_PATH)
 
